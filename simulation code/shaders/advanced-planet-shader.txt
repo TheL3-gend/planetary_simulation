@@ -1,0 +1,54 @@
+#version 330 core
+
+// Input vertex data
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 normal;
+layout(location = 2) in vec2 texCoord;
+layout(location = 3) in vec3 tangent;
+layout(location = 4) in vec3 bitangent;
+
+// Output data to fragment shader
+out vec3 fragNormal;
+out vec3 fragPosition;
+out vec2 fragTexCoord;
+out mat3 TBN;  // Tangent-Bitangent-Normal matrix for normal mapping
+
+// Uniforms
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform bool useNormalMap;
+
+void main() {
+    // Calculate fragment position in world space
+    fragPosition = vec3(model * vec4(position, 1.0));
+    
+    // Calculate normal in world space
+    mat3 normalMatrix = transpose(inverse(mat3(model)));
+    fragNormal = normalize(normalMatrix * normal);
+    
+    // Pass through texture coordinates
+    fragTexCoord = texCoord;
+    
+    // If using normal map, calculate TBN matrix
+    if (useNormalMap) {
+        vec3 T = normalize(normalMatrix * tangent);
+        vec3 B = normalize(normalMatrix * bitangent);
+        vec3 N = fragNormal;
+        
+        // Re-orthogonalize T with respect to N
+        T = normalize(T - dot(T, N) * N);
+        
+        // Compute bitangent from T and N
+        B = cross(N, T);
+        
+        // Create TBN matrix
+        TBN = mat3(T, B, N);
+    } else {
+        // Dummy TBN matrix if not using normal mapping
+        TBN = mat3(1.0);
+    }
+    
+    // Calculate final vertex position
+    gl_Position = projection * view * model * vec4(position, 1.0);
+}
