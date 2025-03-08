@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # create_textures.py - Generate default planet textures
 
+
 import os
 import sys
 import numpy as np
