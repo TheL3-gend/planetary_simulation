@@ -22,7 +22,7 @@ for directory in [TEXTURE_DIR, SHADER_DIR, FONT_DIR]:
 
 # Physics constants
 G = 6.67430e-11  # Gravitational constant (m^3 kg^-1 s^-2)
-SCALE_FACTOR = 1e9  # Scale factor for visualization (1 unit = 1 billion meters)
+SCALE_FACTOR = 1e8  # Scale factor for visualization (1 unit = 1 billion meters)
 COLLISION_DISTANCE = 5.0  # Distance at which bodies collide (scaled units)
 DEFAULT_SIMULATION_SPEED = 3600 * 24  # Default simulation speed (1 day per frame)
 MAX_SIMULATION_SPEED = 3600 * 24 * 30  # Maximum simulation speed (1 month per frame)
