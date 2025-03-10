@@ -60,6 +60,110 @@ def _draw_body_standard(self, body, view_matrix, projection_matrix):
 
 def draw_bodies(self, view_matrix, projection_matrix):
     """Draw all celestial bodies"""
+    if not hasattr(self, 'initialization_successful') or not self.initialization_successful:
+        return
+        
+    try:
+        # Use planet shader
+        shader = self.shader_manager.get_shader("planet")
+        if not shader:
+            logger.error("Planet shader not available")
+            return
+            
+        glUseProgram(shader)
+        
+        # Set uniform values that are the same for all bodies
+        light_pos_loc = glGetUniformLocation(shader, "lightPos")
+        view_pos_loc = glGetUniformLocation(shader, "viewPos")
+        
+        # Find the sun's position (default to origin if not found)
+        sun_pos = np.array([0, 0, 0])  # Default if sun not found
+        for body in self.simulation.bodies:
+            if body.name == "Sun":
+                sun_pos = body.position / SCALE_FACTOR
+                break
+        
+        glUniform3f(light_pos_loc, sun_pos[0], sun_pos[1], sun_pos[2])
+        
+        # Calculate view position
+        eye_pos = self.camera.target - np.array([
+            self.camera.distance * np.sin(self.camera.x_angle) * np.cos(self.camera.y_angle),
+            self.camera.distance * np.sin(self.camera.y_angle),
+            self.camera.distance * np.cos(self.camera.x_angle) * np.cos(self.camera.y_angle)
+        ])
+        glUniform3f(view_pos_loc, eye_pos[0], eye_pos[1], eye_pos[2])
+        
+        # Set projection and view matrices
+        proj_loc = glGetUniformLocation(shader, "projection")
+        view_loc = glGetUniformLocation(shader, "view")
+        
+        glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection_matrix)
+        glUniformMatrix4fv(view_loc, 1, GL_FALSE, view_matrix)
+        
+        # Bind sphere VAO
+        if 'sphere' in self.vaos:
+            glBindVertexArray(self.vaos['sphere'])
+        else:
+            logger.error("Sphere VAO not available")
+            glUseProgram(0)
+            return
+        
+        # Draw each body
+        for body in self.simulation.bodies:
+            # Skip if body has invalid position
+            if not np.all(np.isfinite(body.position)):
+                continue
+                
+            # Set model matrix
+            model_matrix = np.identity(4, dtype=np.float32)
+            
+            # Apply translation
+            model_matrix[0, 3] = body.position[0] / SCALE_FACTOR
+            model_matrix[1, 3] = body.position[1] / SCALE_FACTOR
+            model_matrix[2, 3] = body.position[2] / SCALE_FACTOR
+            
+            # Apply scaling
+            model_matrix[0, 0] = body.visual_radius
+            model_matrix[1, 1] = body.visual_radius
+            model_matrix[2, 2] = body.visual_radius
+            
+            # Set uniforms for this body
+            model_loc = glGetUniformLocation(shader, "model")
+            base_color_loc = glGetUniformLocation(shader, "baseColor")
+            use_texture_loc = glGetUniformLocation(shader, "useTexture")
+            
+            glUniformMatrix4fv(model_loc, 1, GL_FALSE, model_matrix)
+            glUniform3f(base_color_loc, body.color[0], body.color[1], body.color[2])
+            
+            # Bind texture if available
+            if hasattr(body, 'texture_id') and body.texture_id and glIsTexture(body.texture_id):
+                glActiveTexture(GL_TEXTURE0)
+                glBindTexture(GL_TEXTURE_2D, body.texture_id)
+                glUniform1i(glGetUniformLocation(shader, "texSampler"), 0)
+                glUniform1i(use_texture_loc, 1)
+            else:
+                glUniform1i(use_texture_loc, 0)
+            
+            # Draw sphere
+            glDrawElements(GL_TRIANGLES, self.sphere_vertex_count, GL_UNSIGNED_INT, None)
+            
+            # Draw rings if body has them
+            if body.has_rings:
+                self.draw_rings(body, model_matrix, view_matrix, projection_matrix)
+        
+        # Unbind VAO and shader
+        glBindVertexArray(0)
+        glUseProgram(0)
+        
+        # Draw labels if enabled
+        if SHOW_LABELS:
+            self.draw_labels()
+    except Exception as e:
+        logger.error(f"Error drawing bodies: {e}")
+        # Clean up OpenGL state
+        glBindVertexArray(0)
+        glUseProgram(0)
+    """Draw all celestial bodies"""
     # Skip if not initialized
     if not hasattr(self, 'initialization_successful') or not self.initialization_successful:
         return

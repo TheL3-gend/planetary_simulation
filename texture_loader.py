@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# texture_loader.py - Safe texture loading with proper resource management
+# texture_loader.py - Robust texture loading with proper error handling
 
 import os
 import numpy as np
@@ -8,6 +8,7 @@ from OpenGL.GL import *
 import logging
 
 # Configure logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger("TextureLoader")
 
 class TextureLoader:
@@ -20,10 +21,9 @@ class TextureLoader:
         Args:
             texture_dir (str): Directory containing texture files
         """
-        assert isinstance(texture_dir, str), "Texture directory must be a string"
-        
         self.texture_dir = texture_dir
         self.textures = {}  # Maps filenames to OpenGL texture IDs
+        self.default_texture_id = None  # Will be created on first use
         
         # Ensure texture directory exists
         if not os.path.exists(texture_dir):
@@ -33,36 +33,44 @@ class TextureLoader:
             except OSError as e:
                 logger.error(f"Failed to create texture directory: {e}")
                 
-        # Get maximum texture size supported by GPU
+        # Initialize pygame if not already done
+        if not pygame.get_init():
+            try:
+                pygame.init()
+            except Exception as e:
+                logger.warning(f"Failed to initialize pygame: {e}")
+        
+        # Get max texture size
         try:
             self.max_texture_size = glGetIntegerv(GL_MAX_TEXTURE_SIZE)
-            logger.info(f"Maximum texture size: {self.max_texture_size}x{self.max_texture_size}")
-        except Exception as e:
-            logger.warning(f"Could not determine maximum texture size: {e}")
-            self.max_texture_size = 4096  # Safe default
+            logger.info(f"Max texture size: {self.max_texture_size}")
+        except Exception:
+            # Default to a safe value
+            self.max_texture_size = 2048
+            logger.warning(f"Could not determine max texture size, using {self.max_texture_size}")
     
-    def create_default_texture(self):
+    def get_default_texture(self):
         """
-        Create a default checkerboard texture
+        Create or return the default checkerboard texture
         
         Returns:
             int: OpenGL texture ID
         """
-        texture_id = 0
-        
+        # Return cached default texture if it exists
+        if self.default_texture_id is not None and glIsTexture(self.default_texture_id):
+            return self.default_texture_id
+            
         try:
-            # Generate texture ID
+            # Generate new texture
             texture_id = glGenTextures(1)
             glBindTexture(GL_TEXTURE_2D, texture_id)
             
-            # Create checkerboard pattern
-            size = 64  # Fixed size for default texture
+            # Create a simple checkerboard pattern
+            size = 64
             checkerboard = []
-            
             for i in range(size):
                 for j in range(size):
-                    is_white = (i // 8 + j // 8) % 2
-                    if is_white:
+                    if (i // 8 + j // 8) % 2:
                         checkerboard.extend([255, 255, 255, 255])  # White
                     else:
                         checkerboard.extend([128, 128, 128, 255])  # Gray
@@ -80,26 +88,19 @@ class TextureLoader:
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, checkerboard)
             glGenerateMipmap(GL_TEXTURE_2D)
             
-            # Verify texture was created successfully
-            if glIsTexture(texture_id) == GL_FALSE:
-                logger.error(f"Failed to create default texture (invalid texture ID)")
-                return 0
-                
+            # Store the ID for future use
+            self.default_texture_id = texture_id
             return texture_id
-            
         except Exception as e:
             logger.error(f"Error creating default texture: {e}")
             
-            # Clean up on failure
-            if texture_id != 0 and glIsTexture(texture_id) == GL_TRUE:
-                glDeleteTextures(1, [texture_id])
-                
-            # Create absolute minimum fallback texture
+            # Create minimal fallback texture
             try:
                 fallback_id = glGenTextures(1)
                 glBindTexture(GL_TEXTURE_2D, fallback_id)
                 data = np.ones((4, 4, 4), dtype=np.uint8) * 255  # White
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, data)
+                self.default_texture_id = fallback_id
                 return fallback_id
             except:
                 logger.critical("Failed to create fallback texture")
@@ -116,21 +117,20 @@ class TextureLoader:
         Returns:
             int: OpenGL texture ID
         """
-        assert isinstance(filename, str), "Filename must be a string"
-        assert isinstance(mipmap, bool), "Mipmap flag must be a boolean"
-        
+        # Validate input
+        if not isinstance(filename, str) or not filename:
+            logger.error("Invalid filename")
+            return self.get_default_texture()
+            
         # Return cached texture if already loaded
         if filename in self.textures:
             texture_id = self.textures[filename]
-            if glIsTexture(texture_id) == GL_TRUE:
+            if glIsTexture(texture_id):
                 return texture_id
             else:
                 # Remove invalid texture from cache
                 logger.warning(f"Cached texture {filename} is invalid, reloading")
                 del self.textures[filename]
-        
-        # Create default texture as fallback
-        default_texture = self.create_default_texture()
         
         try:
             # Full path to texture file
@@ -139,16 +139,14 @@ class TextureLoader:
             # Check if file exists
             if not os.path.exists(filepath):
                 logger.warning(f"Texture file not found: {filepath}")
-                self.textures[filename] = default_texture
-                return default_texture
+                return self.get_default_texture()
             
             # Load image using pygame
             try:
                 image = pygame.image.load(filepath)
             except pygame.error as e:
                 logger.error(f"Failed to load image {filepath}: {e}")
-                self.textures[filename] = default_texture
-                return default_texture
+                return self.get_default_texture()
                 
             # Convert image to RGBA format if needed
             if image.get_bytesize() == 3:  # RGB format
@@ -163,28 +161,16 @@ class TextureLoader:
                 scale_factor = self.max_texture_size / max_dim
                 new_width = int(width * scale_factor)
                 new_height = int(height * scale_factor)
-                logger.info(f"Resizing texture {filename} from {width}x{height} to {new_width}x{new_height}")
+                logger.info(f"Resizing texture {filename} to {new_width}x{new_height}")
                 image = pygame.transform.smoothscale(image, (new_width, new_height))
                 width, height = new_width, new_height
-            
-            # Check if dimensions are powers of two (optimal for mipmapping)
-            width_pot = self._next_power_of_two(width)
-            height_pot = self._next_power_of_two(height)
-            
-            # Resize to power of two if needed and not too much larger
-            if (width != width_pot or height != height_pot) and \
-               (width_pot <= 1.2 * width and height_pot <= 1.2 * height):
-                logger.info(f"Optimizing texture {filename} to {width_pot}x{height_pot}")
-                image = pygame.transform.smoothscale(image, (width_pot, height_pot))
-                width, height = width_pot, height_pot
             
             # Extract image data
             try:
                 image_data = pygame.image.tostring(image, "RGBA", 1)
             except Exception as e:
                 logger.error(f"Failed to convert image to string: {e}")
-                self.textures[filename] = default_texture
-                return default_texture
+                return self.get_default_texture()
             
             # Generate OpenGL texture
             texture_id = glGenTextures(1)
@@ -201,14 +187,13 @@ class TextureLoader:
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
             
-            # Enable anisotropic filtering if supported
-            if self._check_anisotropic_support():
-                try:
+            # Try to enable anisotropic filtering if supported
+            try:
+                if GL_EXT_texture_filter_anisotropic:
                     max_aniso = glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT)
-                    max_aniso = min(max_aniso, 16.0)  # Limit to reasonable value
                     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, max_aniso)
-                except Exception as e:
-                    logger.debug(f"Failed to set anisotropic filtering: {e}")
+            except:
+                pass  # Not supported, ignore
             
             # Upload texture data
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data)
@@ -217,64 +202,33 @@ class TextureLoader:
             if mipmap:
                 glGenerateMipmap(GL_TEXTURE_2D)
             
-            # Verify texture was created successfully
-            if glIsTexture(texture_id) == GL_FALSE:
-                logger.error(f"Failed to create texture (invalid texture ID)")
-                self.textures[filename] = default_texture
-                return default_texture
-            
             # Store and return the texture ID
             self.textures[filename] = texture_id
+            logger.info(f"Loaded texture: {filename} ({width}x{height})")
             return texture_id
             
         except Exception as e:
             logger.error(f"Error loading texture {filename}: {e}")
-            
-            # Use default texture as fallback
-            self.textures[filename] = default_texture
-            return default_texture
-    
-    def _check_anisotropic_support(self):
-        """
-        Check if anisotropic filtering is supported
-        
-        Returns:
-            bool: True if supported, False otherwise
-        """
-        try:
-            extensions = glGetString(GL_EXTENSIONS)
-            if extensions is None:
-                return False
-                
-            extensions = extensions.decode('utf-8').split()
-            return 'GL_EXT_texture_filter_anisotropic' in extensions
-        except Exception:
-            return False
-    
-    def _next_power_of_two(self, x):
-        """
-        Get the next power of two greater than or equal to x
-        
-        Args:
-            x (int): Input value
-            
-        Returns:
-            int: Next power of two
-        """
-        assert isinstance(x, int) and x > 0, "Input must be a positive integer"
-        return 1 if x == 0 else 2 ** (x - 1).bit_length()
+            return self.get_default_texture()
     
     def cleanup(self):
         """Delete all textures and free resources"""
-        # Copy keys to avoid modifying dictionary during iteration
+        # Get list of texture IDs first to avoid modifying dict during iteration
         texture_ids = list(self.textures.values())
         
+        # Add default texture if it exists
+        if self.default_texture_id is not None:
+            texture_ids.append(self.default_texture_id)
+        
+        # Delete all textures
         for texture_id in texture_ids:
-            if texture_id and glIsTexture(texture_id) == GL_TRUE:
+            if texture_id and glIsTexture(texture_id):
                 try:
                     glDeleteTextures(1, [texture_id])
                 except Exception as e:
                     logger.warning(f"Error deleting texture {texture_id}: {e}")
         
+        # Clear maps
         self.textures.clear()
+        self.default_texture_id = None
         logger.info("All textures cleaned up")
