@@ -3,12 +3,13 @@
 
 import os
 import numpy as np
+import pygame  # Added missing import
 from OpenGL.GL import *
 from OpenGL.GLU import *
 from constants import *
 from texture_loader import TextureLoader
 from texture_mapping import get_texture_filename, get_normal_map, get_specular_map
-import high_res_texture_integration as hires
+import texture_integration as hires
 
 def initialize_renderer(renderer):
     """
@@ -264,6 +265,9 @@ def create_enhanced_sphere(renderer, stacks, slices):
         # Unbind VAO
         glBindVertexArray(0)
         
+        # Store vertex count for later use
+        renderer.enhanced_sphere_vertex_count = len(indices)
+        
         return vao, len(indices)
     except Exception as e:
         print(f"Error creating enhanced sphere mesh: {e}")
@@ -347,7 +351,11 @@ def draw_body_with_advanced_shader(renderer, body, view_matrix, projection_matri
         
         # Set time for animations
         time_loc = glGetUniformLocation(shader, "time")
-        glUniform1f(time_loc, float(pygame.time.get_ticks()) / 1000.0)
+        # Check if pygame is initialized
+        if pygame.get_init():
+            glUniform1f(time_loc, float(pygame.time.get_ticks()) / 1000.0)
+        else:
+            glUniform1f(time_loc, 0.0)  # Fallback if pygame not initialized
         
         # Set feature toggles
         use_texture_loc = glGetUniformLocation(shader, "useTexture")
@@ -403,20 +411,24 @@ def draw_body_with_advanced_shader(renderer, body, view_matrix, projection_matri
         is_atmospheric = body.name in ["Venus", "Jupiter", "Saturn", "Uranus", "Neptune"]
         glUniform1i(is_atmospheric_loc, 1 if is_atmospheric else 0)
         
-        # Use enhanced sphere if available, otherwise fall back to regular sphere
-        if 'enhanced_sphere' in renderer.vaos:
+        # Check if enhanced sphere is available and has vertex count
+        if 'enhanced_sphere' in renderer.vaos and hasattr(renderer, 'enhanced_sphere_vertex_count'):
             glBindVertexArray(renderer.vaos['enhanced_sphere'])
             glDrawElements(GL_TRIANGLES, renderer.enhanced_sphere_vertex_count, GL_UNSIGNED_INT, None)
-        else:
+        # Fallback to regular sphere
+        elif 'sphere' in renderer.vaos and hasattr(renderer, 'sphere_vertex_count'):
             glBindVertexArray(renderer.vaos['sphere'])
             glDrawElements(GL_TRIANGLES, renderer.sphere_vertex_count, GL_UNSIGNED_INT, None)
+        else:
+            print(f"Warning: No suitable sphere mesh found for body {body.name}")
+            return False
         
         # Unbind
         glBindVertexArray(0)
         glUseProgram(0)
         
         # Draw rings if body has them
-        if body.has_rings:
+        if hasattr(body, 'has_rings') and body.has_rings:
             renderer.draw_rings(body, model_matrix, view_matrix, projection_matrix)
             
         return True

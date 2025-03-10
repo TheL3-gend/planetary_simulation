@@ -6,10 +6,19 @@ import numpy as np
 import pygame
 from OpenGL.GL import *
 import logging
+from typing import Optional
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger("TextureLoader")
+
+# Define anisotropic filtering constants if not already defined
+try:
+    from OpenGL.GL.EXT.texture_filter_anisotropic import GL_TEXTURE_MAX_ANISOTROPY_EXT, GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
+except ImportError:
+    GL_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FE
+    GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FF
+    logger.warning("Using manually defined anisotropic filtering constants")
 
 class TextureLoader:
     """Manages loading and optimization of textures with proper resource management"""
@@ -175,29 +184,24 @@ class TextureLoader:
             # Generate OpenGL texture
             texture_id = glGenTextures(1)
             glBindTexture(GL_TEXTURE_2D, texture_id)
-            
+
             # Set texture parameters
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            
+
             if mipmap:
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
             else:
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-                
+
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
-            
+
             # Try to enable anisotropic filtering if supported
-            try:
-                if GL_EXT_texture_filter_anisotropic:
-                    max_aniso = glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT)
-                    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, max_aniso)
-            except:
-                pass  # Not supported, ignore
+            self._setup_anisotropic_filtering()
             
             # Upload texture data
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data)
-            
+
             # Generate mipmaps if requested
             if mipmap:
                 glGenerateMipmap(GL_TEXTURE_2D)
@@ -210,6 +214,33 @@ class TextureLoader:
         except Exception as e:
             logger.error(f"Error loading texture {filename}: {e}")
             return self.get_default_texture()
+    
+    def _setup_anisotropic_filtering(self):
+        """Helper method to safely enable anisotropic filtering if supported"""
+        try:
+            # Check if extension is available by getting the extensions string
+            extensions = glGetString(GL_EXTENSIONS)
+            if extensions is None:
+                logger.warning("Could not get OpenGL extensions string")
+                return
+                
+            # Convert bytes to string and check for the extension
+            extensions_str = extensions.decode('ascii')
+            if "GL_EXT_texture_filter_anisotropic" not in extensions_str:
+                logger.info("Anisotropic filtering not supported")
+                return
+
+            # Get max anisotropy value
+            max_aniso = glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT)
+            if max_aniso > 0:
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, max_aniso)
+                logger.info(f"Anisotropic filtering enabled: {max_aniso}x")
+            else:
+                logger.warning("Invalid max anisotropy value")
+                
+        except Exception as e:
+            # Catch any errors but continue with texture loading
+            logger.warning(f"Could not set up anisotropic filtering: {e}")
     
     def cleanup(self):
         """Delete all textures and free resources"""
