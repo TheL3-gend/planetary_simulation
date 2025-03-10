@@ -10,11 +10,15 @@ FULLSCREEN = False
 MAX_FPS = 60
 VSYNC = True
 
-# Paths
+# Paths (using os.path for cross-platform compatibility)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEXTURE_DIR = os.path.join(BASE_DIR, "textures")
 SHADER_DIR = os.path.join(BASE_DIR, "shaders")
 FONT_DIR = os.path.join(BASE_DIR, "fonts")
+
+# Ensure directories exist
+for directory in [TEXTURE_DIR, SHADER_DIR, FONT_DIR]:
+    os.makedirs(directory, exist_ok=True)
 
 # Physics constants
 G = 6.67430e-11  # Gravitational constant (m^3 kg^-1 s^-2)

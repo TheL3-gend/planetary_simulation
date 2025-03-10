@@ -1,236 +1,130 @@
 #!/usr/bin/env python3
-# camera.py - Camera controls for the simulation with improved stability
+# body.py - Celestial body class for gravity simulation
 
 import numpy as np
 import math
-from pygame.locals import *
-import pygame
-from constants import *
+from constants import MAX_TRAIL_LENGTH, SCALE_FACTOR
 
-class Camera:
-    """Handles camera positioning and movement in the 3D scene"""
+class Body:
+    """Represents a celestial body in the simulation"""
     
-    def __init__(self):
-        """Initialize camera with default values"""
-        self.distance = 100.0
-        self.x_angle = 0.0
-        self.y_angle = 0.2  # Slight angle to see the ecliptic plane
-        self.target = np.array([0.0, 0.0, 0.0])
-        self.follow_target = None
-        self.smooth_factor = 0.1  # For smooth camera movement
-        self.target_distance = self.distance  # For smooth zooming
+    def __init__(self, name, mass, radius, position, velocity, color, texture_name, has_rings=False):
+        """Initialize a celestial body
         
-        # For panning with middle mouse button
-        self.panning = False
-        self.pan_reference = None
-        self.pan_sensitivity = 0.1
+        Args:
+            name (str): Name of the celestial body
+            mass (float): Mass in kg
+            radius (float): Radius in km
+            position (list/np.array): Initial position [x, y, z] in m
+            velocity (list/np.array): Initial velocity [vx, vy, vz] in m/s
+            color (tuple): RGB color (0.0-1.0)
+            texture_name (str): Filename of texture
+            has_rings (bool): Whether the body has rings
+        """
+        self.name = name
+        self.mass = mass
+        self.radius = radius * 1000  # Convert km to m
+        self.position = np.array(position, dtype=np.float64)
+        self.velocity = np.array(velocity, dtype=np.float64)
+        self.forces = np.zeros(3, dtype=np.float64)
+        self.color = color
+        self.texture_name = texture_name
+        self.texture_id = None  # Set by the renderer
+        self.has_rings = has_rings
         
-        # Camera mode
-        self.free_mode = False  # If True, camera moves freely; if False, orbits target
+        # Visual properties
+        self.visual_radius = max(0.1, math.log10(self.radius / 1000) / 2)  # Logarithmic scale for visualization
+        if has_rings:
+            self.ring_inner_radius = 0.6
+            self.ring_outer_radius = 1.0
         
-        # Movement speed
-        self.movement_speed = 5.0
+        # Physics properties
+        self.orbital_period = 0.0  # Set by simulation
         
-        # Key states for continuous movement
-        self.key_states = {
-            K_w: False,
-            K_a: False,
-            K_s: False,
-            K_d: False,
-            K_q: False,
-            K_e: False
-        }
+        # Trail for orbital visualization
+        self.trail = []
+        self.update_trail()  # Initialize trail with current position
         
-        # Safe limits for camera parameters
-        self.min_distance = 5.0
-        self.max_distance = 10000.0
+        # Additional textures for advanced rendering
+        self.normal_map_name = None
+        self.specular_map_name = None
+        self.clouds_texture_name = None
+        self.night_texture_name = None
+    
+    def update_velocity(self, dt):
+        """Update velocity based on current forces and time step
         
-    def setup_view(self):
-        """Set up the OpenGL view matrix based on camera properties"""
-        try:
-            # Apply safety limits to camera parameters
-            self.distance = max(self.min_distance, min(self.max_distance, self.distance))
-            self.y_angle = max(-math.pi/2 + 0.01, min(math.pi/2 - 0.01, self.y_angle))
+        Args:
+            dt (float): Time step in seconds
+        """
+        # Check for invalid forces
+        if not np.all(np.isfinite(self.forces)):
+            return
             
-            # Calculate camera position in Cartesian coordinates
-            eye_x = self.target[0] + self.distance * np.sin(self.x_angle) * np.cos(self.y_angle)
-            eye_y = self.target[1] + self.distance * np.sin(self.y_angle)
-            eye_z = self.target[2] + self.distance * np.cos(self.x_angle) * np.cos(self.y_angle)
-            
-            # Set up look-at matrix
-            from OpenGL.GLU import gluLookAt
-            gluLookAt(
-                eye_x, eye_y, eye_z,  # Eye position
-                self.target[0], self.target[1], self.target[2],  # Target
-                0, 1, 0  # Up vector
-            )
-        except Exception as e:
-            print(f"Error setting up camera view: {e}")
-            # Fallback to a default view
-            from OpenGL.GLU import gluLookAt
-            gluLookAt(0, 0, 100, 0, 0, 0, 0, 1, 0)
+        # a = F/m
+        acceleration = self.forces / self.mass
         
-    def handle_mouse_motion(self, pos, rel, buttons):
-        """Handle mouse motion for camera control"""
-        try:
-            if buttons[0]:  # Left mouse button - rotation
-                dx, dy = rel
-                
-                # Fix inverted mouse by negating dy
-                self.x_angle -= dx * 0.01  # Negative to fix inversion
-                self.y_angle -= dy * 0.01  # Negative to fix inversion
-                
-                # Clamp y angle to avoid gimbal lock
-                self.y_angle = np.clip(self.y_angle, -np.pi/2 + 0.1, np.pi/2 - 0.1)
-                
-            elif buttons[1]:  # Middle mouse button - panning
-                if not self.panning:
-                    self.panning = True
-                    self.pan_reference = pos
-                else:
-                    dx, dy = rel
-                    
-                    # Check for valid rel values
-                    if not np.all(np.isfinite([dx, dy])):
-                        return
-                    
-                    # Calculate right and up vectors in camera space
-                    right_vec = np.array([
-                        np.cos(self.x_angle),
-                        0,
-                        -np.sin(self.x_angle)
-                    ])
-                    
-                    up_vec = np.array([
-                        np.sin(self.x_angle) * np.sin(self.y_angle),
-                        np.cos(self.y_angle),
-                        np.cos(self.x_angle) * np.sin(self.y_angle)
-                    ])
-                    
-                    # Move target in these directions
-                    pan_amount = self.distance * self.pan_sensitivity
-                    pan_amount = max(0.1, min(pan_amount, 100.0))  # Limit pan amount
-                    
-                    self.target -= right_vec * dx * pan_amount
-                    self.target += up_vec * dy * pan_amount
+        # v = v0 + a*dt
+        self.velocity += acceleration * dt
+    
+    def update_position(self, dt):
+        """Update position based on current velocity and time step
+        
+        Args:
+            dt (float): Time step in seconds
+        """
+        # Check for invalid velocity
+        if not np.all(np.isfinite(self.velocity)):
+            return
+            
+        # p = p0 + v*dt
+        self.position += self.velocity * dt
+    
+    def add_force(self, force):
+        """Add a force to the body
+        
+        Args:
+            force (np.array): Force vector to add
+        """
+        # Check for invalid force
+        if not np.all(np.isfinite(force)):
+            return
+            
+        self.forces += force
+    
+    def update_trail(self):
+        """Update orbital trail with current position"""
+        # Add current position to trail
+        self.trail.append(np.copy(self.position))
+        
+        # Keep trail at maximum length
+        if len(self.trail) > MAX_TRAIL_LENGTH:
+            self.trail.pop(0)
+    
+    def get_info_text(self):
+        """Get formatted information about the body
+        
+        Returns:
+            list: Lines of information text
+        """
+        # Convert units for display
+        pos_km = self.position / 1000  # m to km
+        vel_km = self.velocity / 1000  # m/s to km/s
+        
+        info = [
+            f"Mass: {self.mass:.2e} kg",
+            f"Radius: {self.radius/1000:.1f} km",
+            f"Position: ({pos_km[0]:.2e}, {pos_km[1]:.2e}, {pos_km[2]:.2e}) km",
+            f"Velocity: ({vel_km[0]:.2f}, {vel_km[1]:.2f}, {vel_km[2]:.2f}) km/s",
+            f"Speed: {np.linalg.norm(vel_km):.2f} km/s"
+        ]
+        
+        # Add orbital period if available
+        if self.orbital_period > 0:
+            days = self.orbital_period / (24 * 3600)
+            if days > 365:
+                info.append(f"Orbital Period: {days/365.25:.2f} years")
             else:
-                self.panning = False
-        except Exception as e:
-            print(f"Error handling mouse motion: {e}")
-            
-    def handle_mouse_wheel(self, y):
-        """Handle mouse wheel for zooming"""
-        try:
-            # Validate y value
-            if not np.isfinite(y) or abs(y) > 10:
-                return
-                
-            zoom_factor = 0.9 if y > 0 else 1.1
-            self.target_distance *= zoom_factor
-            self.target_distance = max(self.min_distance, min(self.max_distance, self.target_distance))
-        except Exception as e:
-            print(f"Error handling mouse wheel: {e}")
+                info.append(f"Orbital Period: {days:.2f} days")
         
-    def handle_key(self, key):
-        """Handle keyboard input for camera control"""
-        try:
-            if key == K_f:
-                self.free_mode = not self.free_mode
-            elif key == K_c:
-                self.reset()
-            elif key == K_LEFT:
-                self.x_angle += 0.1
-            elif key == K_RIGHT:
-                self.x_angle -= 0.1
-            elif key == K_UP:
-                self.y_angle += 0.1
-                self.y_angle = min(self.y_angle, np.pi/2 - 0.1)
-            elif key == K_DOWN:
-                self.y_angle -= 0.1
-                self.y_angle = max(self.y_angle, -np.pi/2 + 0.1)
-            elif key in self.key_states:
-                self.key_states[key] = True
-        except Exception as e:
-            print(f"Error handling key: {e}")
-        
-    def handle_key_up(self, key):
-        """Handle key release events"""
-        try:
-            if key in self.key_states:
-                self.key_states[key] = False
-        except Exception as e:
-            print(f"Error handling key up: {e}")
-            
-    def update(self, dt, selected_body=None):
-        """Update camera position and orientation"""
-        try:
-            # Validate dt to avoid extreme values
-            dt = max(0.001, min(dt, 1.0))
-            
-            # Smooth zoom
-            self.distance += (self.target_distance - self.distance) * self.smooth_factor
-            self.distance = max(self.min_distance, min(self.max_distance, self.distance))
-            
-            # If in free mode, handle movement based on key states
-            if self.free_mode:
-                self.update_free_movement(dt)
-            elif selected_body:
-                # Smoothly move target to selected body
-                target_pos = selected_body.position / SCALE_FACTOR
-                
-                # Validate target position
-                if np.all(np.isfinite(target_pos)):
-                    self.target += (target_pos - self.target) * self.smooth_factor
-        except Exception as e:
-            print(f"Error updating camera: {e}")
-            
-    def update_free_movement(self, dt):
-        """Handle free camera movement based on key states"""
-        try:
-            # Calculate movement vectors in camera space
-            forward_vec = np.array([
-                np.sin(self.x_angle) * np.cos(self.y_angle),
-                np.sin(self.y_angle),
-                np.cos(self.x_angle) * np.cos(self.y_angle)
-            ])
-            
-            right_vec = np.array([
-                np.cos(self.x_angle),
-                0,
-                -np.sin(self.x_angle)
-            ])
-            
-            up_vec = np.array([0, 1, 0])
-            
-            # Apply movement based on key states
-            move_amount = self.movement_speed * dt
-            
-            # Limit move amount to reasonable value
-            move_amount = max(0.01, min(move_amount, 10.0))
-            
-            if self.key_states[K_w]:  # Forward
-                self.target += forward_vec * move_amount
-            if self.key_states[K_s]:  # Backward
-                self.target -= forward_vec * move_amount
-            if self.key_states[K_a]:  # Left
-                self.target -= right_vec * move_amount
-            if self.key_states[K_d]:  # Right
-                self.target += right_vec * move_amount
-            if self.key_states[K_q]:  # Down
-                self.target -= up_vec * move_amount
-            if self.key_states[K_e]:  # Up
-                self.target += up_vec * move_amount
-        except Exception as e:
-            print(f"Error in free camera movement: {e}")
-            
-    def reset(self):
-        """Reset camera to default position"""
-        try:
-            self.distance = 100.0
-            self.target_distance = 100.0
-            self.x_angle = 0.0
-            self.y_angle = 0.2
-            self.target = np.array([0.0, 0.0, 0.0])
-            self.free_mode = False
-        except Exception as e:
-            print(f"Error resetting camera: {e}")
+        return info
