@@ -34,6 +34,9 @@ except (ImportError, AttributeError):
     has_debug_utils = False
     # Create minimal debug functions to prevent errors
     class MinimalDebugUtils:
+        def __init__(self):
+            self._debug_mode = False
+            
         @staticmethod
         def initialize_debug():
             print("Debug system initialized (minimal)")
@@ -65,6 +68,40 @@ except (ImportError, AttributeError):
                 print(f"OpenGL error at {where}: {error}")
                 return True
             return False
+            
+        @staticmethod
+        def check_shader_compilation(shader):
+            # Check if shader compiled successfully
+            status = glGetShaderiv(shader, GL_COMPILE_STATUS)
+            if status != GL_TRUE:
+                # Get shader info log
+                log = glGetShaderInfoLog(shader).decode('utf-8')
+                print(f"Shader compilation failed: {log}")
+                return False
+            return True
+        
+        @staticmethod
+        def check_program_linking(program):
+            # Check if program linked successfully
+            status = glGetProgramiv(program, GL_LINK_STATUS)
+            if status != GL_TRUE:
+                # Get program info log
+                log = glGetProgramInfoLog(program).decode('utf-8')
+                print(f"Program linking failed: {log}")
+                return False
+            return True
+        
+        @staticmethod
+        def validate_program(program):
+            # Validate program
+            glValidateProgram(program)
+            status = glGetProgramiv(program, GL_VALIDATE_STATUS)
+            if status != GL_TRUE:
+                # Get validation info log
+                log = glGetProgramInfoLog(program).decode('utf-8')
+                print(f"Program validation warning: {log}")
+                return False
+            return True
     
     # Use minimal debug utils as a fallback
     debug_utils = MinimalDebugUtils()

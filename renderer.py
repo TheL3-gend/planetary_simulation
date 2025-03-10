@@ -700,9 +700,18 @@ class Renderer:
     def assign_textures(self):
         """Assign textures to bodies in the simulation"""
         for body in self.simulation.bodies:
-            if hasattr(body, 'texture_name') and body.texture_name:
-                body.texture_id = self.texture_manager.load_texture(body.texture_name)
-                debug_utils.debug_print(f"Assigned texture {body.texture_name} to {body.name}")
+            try:
+                if hasattr(body, 'texture_name') and body.texture_name:
+                    body.texture_id = self.texture_manager.load_texture(body.texture_name)
+                    debug_utils.debug_print(f"Assigned texture {body.texture_name} to {body.name}")
+                else:
+                    # Assign default texture if the body doesn't have a texture name
+                    body.texture_id = self.texture_manager.default_texture
+                    debug_utils.debug_print(f"Assigned default texture to {body.name}")
+            except Exception as e:
+                logger.error(f"Error assigning texture to {body.name}: {e}")
+                # Ensure the body has a texture_id to prevent further errors
+                body.texture_id = self.texture_manager.default_texture
 
     def render(self):
         """Render the scene"""

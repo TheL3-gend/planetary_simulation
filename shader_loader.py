@@ -13,6 +13,7 @@ def load_shader(vertex_file, fragment_file):
         vertex_path = os.path.join(SHADER_DIR, vertex_file)
         fragment_path = os.path.join(SHADER_DIR, fragment_file)
         
+        
         # Check if files exist
         if not os.path.exists(vertex_path):
             raise FileNotFoundError(f"Vertex shader file not found: {vertex_path}")

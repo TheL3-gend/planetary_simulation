@@ -364,3 +364,4 @@ class Simulation:
         ]
 
         return info
+    

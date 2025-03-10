@@ -211,29 +211,49 @@ class TextRenderer:
         self.fonts = {}
         self.cache = {}
         self.max_cache_size = 1000  # Limit cache size
+        self.fallback_font = None  # Emergency fallback font
+        
+        # Create an emergency fallback font that should work on any system
+        try:
+            self.fallback_font = pygame.font.SysFont(None, 16)  # Default system font
+        except:
+            print("Critical error: Could not create fallback font")
     
     def add_font(self, name, font_name, size):
         """Add a font to the renderer"""
         try:
-            # Try system font first
-            font = pygame.font.SysFont(font_name, size)
+            # Try to load the specified font
+            try:
+                # Try as a system font first
+                font = pygame.font.SysFont(font_name, size)
+                if font is None:
+                    raise ValueError("SysFont returned None")
+            except:
+                try:
+                    # Try as a file font
+                    font_path = os.path.join(FONT_DIR, f"{font_name}.ttf")
+                    if os.path.exists(font_path):
+                        font = pygame.font.Font(font_path, size)
+                    else:
+                        raise FileNotFoundError(f"Font file not found: {font_path}")
+                except:
+                    # Fall back to default font
+                    if self.fallback_font:
+                        font = self.fallback_font
+                    else:
+                        font = pygame.font.SysFont(None, size)
             
-            # Fall back to default font if needed
+            # Double-check that we have a valid font
             if font is None:
-                print(f"Warning: Could not load font {font_name}, using default")
-                font = pygame.font.SysFont(None, size)
-                
-            if font is None:
-                raise RuntimeError(f"Failed to create font {font_name} at size {size}")
+                raise RuntimeError("Failed to create a valid font object")
                 
             self.fonts[name] = font
         except Exception as e:
             print(f"Error loading font {font_name}: {e}")
-            # Try to use default font
-            try:
-                self.fonts[name] = pygame.font.SysFont(None, size)
-            except:
-                print(f"Critical error: Could not create default font")
+            # Use fallback font
+            if self.fallback_font:
+                self.fonts[name] = self.fallback_font
+                print(f"Using fallback font for {name}")
     
     def render_text(self, text, font_name, color):
         """Render text to a surface, with caching"""
@@ -245,23 +265,36 @@ class TextRenderer:
             if key in self.cache:
                 return self.cache[key]
             
-            # Get font
-            font = self.fonts.get(font_name, self.fonts.get("standard"))
+            # Ensure text is a string
+            if not isinstance(text, str):
+                text = str(text)
             
-            # Check if we have a valid font
+            # Get font
+            font = self.fonts.get(font_name)
+            
+            # Fallback to any available font
             if font is None:
-                if not self.fonts:
-                    print("No fonts available")
+                if self.fonts:
+                    # Use first available font
+                    font = next(iter(self.fonts.values()))
+                elif self.fallback_font:
+                    # Use emergency fallback
+                    font = self.fallback_font
+                else:
+                    # Cannot render text
+                    print(f"No fonts available to render text: {text}")
                     return None
-                # Use first available font as fallback
-                font = next(iter(self.fonts.values()))
             
             # Render text
             try:
                 text_surface = font.render(text, True, color)
-            except:
-                # Fall back to a simpler text
-                text_surface = font.render("Error rendering text", True, (255, 0, 0))
+            except Exception as e:
+                # Try to render a simpler version
+                try:
+                    text_surface = font.render("Error rendering text", True, (255, 0, 0))
+                except:
+                    # Truly cannot render
+                    return None
             
             # Cache the result
             if len(self.cache) >= self.max_cache_size:
@@ -384,3 +417,4 @@ class PlanetLabels:
         except Exception as e:
             print(f"Error projecting point: {e}")
             return None
+        
