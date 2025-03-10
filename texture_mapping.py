@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-# texture_mapping.py - Mapping for texture resources with improved reliability
+# texture_mapping.py - Fixed version of texture mapping utilities
 
 import os
+import logging
 from constants import TEXTURE_DIR
+
+# Configure logging
+logger = logging.getLogger("GravitySim.TextureMapping")
 
 # Map between expected texture filenames and high-resolution filenames
 TEXTURE_MAPPING = {
@@ -55,8 +59,10 @@ def get_texture_filename(texture_name):
     Returns:
         str: The filename to use (original or high-res)
     """
-    assert isinstance(texture_name, str), "Texture name must be a string"
-    
+    if not texture_name:
+        logger.warning("Empty texture name passed to get_texture_filename")
+        return "sun.jpg"  # Default fallback
+        
     # First check if the original texture exists
     original_path = os.path.join(TEXTURE_DIR, texture_name)
     if os.path.exists(original_path):
@@ -72,6 +78,14 @@ def get_texture_filename(texture_name):
     # Return original as fallback
     return texture_name
 
+def get_normal_map(base_texture):
+    """Get normal map filename for a texture if available"""
+    return get_special_texture_filename("normal", base_texture)
+    
+def get_specular_map(base_texture):
+    """Get specular map filename for a texture if available"""
+    return get_special_texture_filename("specular", base_texture)
+
 def get_special_texture_filename(texture_type, base_texture):
     """
     Get filename for a special texture type (normal map, specular, etc.)
@@ -83,9 +97,9 @@ def get_special_texture_filename(texture_type, base_texture):
     Returns:
         str or None: The special texture filename or None if not available
     """
-    assert isinstance(texture_type, str), "Texture type must be a string"
-    assert isinstance(base_texture, str), "Base texture must be a string"
-    
+    if not base_texture:
+        return None
+        
     mapping = None
     if texture_type == "normal":
         mapping = NORMAL_MAPPING
@@ -108,77 +122,53 @@ def get_special_texture_filename(texture_type, base_texture):
             
     return None
 
-def check_textures(required_textures=None):
-    """
-    Check if required textures are available
-    
-    Args:
-        required_textures (list): List of required texture names
-        
-    Returns:
-        tuple: (has_all_textures, missing_textures, has_high_res)
-    """
-    if required_textures is None:
-        # Default essential textures
-        required_textures = [
-            "sun.jpg", "mercury.jpg", "venus.jpg", "earth.jpg", 
-            "mars.jpg", "jupiter.jpg", "saturn.jpg", "uranus.jpg", 
-            "neptune.jpg", "moon.jpg"
-        ]
-    
-    assert isinstance(required_textures, list), "Required textures must be a list"
-    
-    missing_textures = []
-    has_high_res = False
-    
-    # Check each required texture
-    for texture in required_textures:
-        original_path = os.path.join(TEXTURE_DIR, texture)
-        high_res_path = None
-        
-        if texture in TEXTURE_MAPPING:
-            high_res_name = TEXTURE_MAPPING[texture]
-            high_res_path = os.path.join(TEXTURE_DIR, high_res_name)
-            if os.path.exists(high_res_path):
-                has_high_res = True
-        
-        # Check if either version exists
-        if not os.path.exists(original_path) and (high_res_path is None or not os.path.exists(high_res_path)):
-            missing_textures.append(texture)
-    
-    return (len(missing_textures) == 0, missing_textures, has_high_res)
-
-def apply_texture_mappings(body_list):
+def convert_texture_names(body_list):
     """
     Apply texture mappings to a list of celestial bodies
     
     Args:
         body_list (list): List of Body objects
-        
-    Returns:
-        bool: True if successful, False otherwise
     """
-    assert isinstance(body_list, list), "Body list must be a list"
     if not body_list:
-        return True  # Empty list is valid
+        return
     
     try:
         for body in body_list:
-            # Set main texture
-            body.texture_name = get_texture_filename(body.texture_name)
+            # Skip bodies without texture names
+            if not hasattr(body, 'texture_name') or not body.texture_name:
+                continue
+                
+            # Set main texture to high-res version if available
+            high_res_name = get_texture_filename(body.texture_name)
+            if high_res_name != body.texture_name:
+                logger.info(f"Using high-res texture for {body.name}: {high_res_name}")
+                body.texture_name = high_res_name
             
             # Set special textures
-            body.normal_map_name = get_special_texture_filename("normal", body.texture_name)
-            body.specular_map_name = get_special_texture_filename("specular", body.texture_name)
-            
-            # Add body-specific special textures
-            if body.name == "Earth":
-                body.clouds_texture_name = get_special_texture_filename("special_earth_clouds", "")
-                body.night_texture_name = get_special_texture_filename("special_earth_night", "")
-            elif body.name == "Jupiter":
-                body.clouds_texture_name = get_special_texture_filename("special_jupiter_clouds", "")
+            # Normal map
+            normal_map = get_normal_map(body.texture_name)
+            if normal_map:
+                body.normal_map_name = normal_map
                 
-        return True
+            # Specular map
+            specular_map = get_specular_map(body.texture_name)
+            if specular_map:
+                body.specular_map_name = specular_map
+            
+            # Body-specific special textures
+            if body.name == "Earth":
+                earth_clouds = get_special_texture_filename("special_earth_clouds", "")
+                if earth_clouds:
+                    body.clouds_texture_name = earth_clouds
+                    
+                earth_night = get_special_texture_filename("special_earth_night", "")
+                if earth_night:
+                    body.night_texture_name = earth_night
+                    
+            elif body.name == "Jupiter":
+                jupiter_clouds = get_special_texture_filename("special_jupiter_clouds", "")
+                if jupiter_clouds:
+                    body.clouds_texture_name = jupiter_clouds
+                    
     except Exception as e:
-        print(f"Error applying texture mappings: {e}")
-        return False
+        logger.error(f"Error converting texture names: {e}")

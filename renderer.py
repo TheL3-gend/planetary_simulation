@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# renderer.py - OpenGL rendering for gravity simulation
+# renderer.py - OpenGL rendering for gravity simulation (FIXED VERSION)
 
 import numpy as np
 import pygame
@@ -9,26 +9,14 @@ from OpenGL.GL import shaders
 import os
 import math
 import traceback
+import debug_utils
 
-# --- Constants (Replace with your actual constants) ---
-WINDOW_WIDTH = 800
-WINDOW_HEIGHT = 600
-SCALE_FACTOR = 1  # Adjust as needed
-SPHERE_DETAIL = 30
-SHOW_TRAILS = True
-SHOW_AXES = True
-SHOW_LABELS = False  # Placeholder for label rendering
-TEXTURE_DIR = "textures"  # Directory for textures
-SHADER_DIR = "shaders"  # Directory for shaders
+# Import from constants file
+from constants import *
 
-# Placeholder logger (replace with a real logging system)
-class Logger:
-    def error(self, message):
-        print(f"ERROR: {message}")
-    def warning(self, message):
-        print(f"WARNING: {message}")
-
-logger = Logger()
+# Access shared logger
+import logging
+logger = logging.getLogger("GravitySim.Renderer")
 
 class TextureManager:
     """Manages loading and binding of textures"""
@@ -40,9 +28,11 @@ class TextureManager:
         # Create texture directory if it doesn't exist
         if not os.path.exists(TEXTURE_DIR):
             os.makedirs(TEXTURE_DIR)
+            logger.info(f"Created texture directory: {TEXTURE_DIR}")
 
         # Default texture (used if requested texture not found)
         self.default_texture = self.create_default_texture()
+        debug_utils.debug_print(f"Default texture created: {self.default_texture}")
 
     def create_default_texture(self):
         """Create a default checkerboard texture"""
@@ -73,23 +63,27 @@ class TextureManager:
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, checkerboard)
             glGenerateMipmap(GL_TEXTURE_2D)
 
+            debug_utils.check_gl_errors("create_default_texture")
             return texture_id
         except Exception as e:
-            print(f"Error creating default texture: {e}")
+            logger.error(f"Error creating default texture: {e}")
             # Create a fallback texture ID that's just blank
             try:
                 texture_id = glGenTextures(1)
                 glBindTexture(GL_TEXTURE_2D, texture_id)
-                data = np.zeros((4, 4, 4), dtype=np.uint8)
-                data[:,:] = [255, 255, 255, 255]
+                data = np.ones((4, 4, 4), dtype=np.uint8) * 255  # White
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, data)
                 return texture_id
-            except:
-                print("Critical error creating fallback texture")
+            except Exception as e2:
+                logger.critical(f"Critical error creating fallback texture: {e2}")
                 return 0
 
     def load_texture(self, filename):
         """Load a texture from file"""
+        if not filename:
+            logger.warning("Empty filename passed to load_texture")
+            return self.default_texture
+            
         if filename in self.textures:
             return self.textures[filename]
 
@@ -99,11 +93,15 @@ class TextureManager:
 
             # Check if file exists
             if not os.path.exists(filepath):
-                print(f"Texture file not found: {filepath}")
+                logger.warning(f"Texture file not found: {filepath}")
                 return self.default_texture
 
             # Load image using pygame
-            image = pygame.image.load(filepath)
+            try:
+                image = pygame.image.load(filepath)
+            except pygame.error as e:
+                logger.error(f"Failed to load image {filepath}: {e}")
+                return self.default_texture
 
             # Convert to RGBA if not already
             if image.get_bytesize() == 3:  # RGB
@@ -127,13 +125,16 @@ class TextureManager:
 
             # Generate mipmaps
             glGenerateMipmap(GL_TEXTURE_2D)
+            
+            debug_utils.check_gl_errors(f"load_texture({filename})")
 
             # Store and return texture ID
             self.textures[filename] = texture_id
+            debug_utils.debug_print(f"Loaded texture {filename} ({width}x{height})")
             return texture_id
 
         except Exception as e:
-            print(f"Error loading texture {filename}: {e}")
+            logger.error(f"Error loading texture {filename}: {e}")
             traceback.print_exc()
             return self.default_texture
 
@@ -148,8 +149,9 @@ class TextureManager:
                 glDeleteTextures(1, [self.default_texture])
 
             self.textures = {}
+            logger.info("Texture manager cleaned up")
         except Exception as e:
-            print(f"Error cleaning up textures: {e}")
+            logger.error(f"Error cleaning up textures: {e}")
 
 
 class ShaderManager:
@@ -158,13 +160,15 @@ class ShaderManager:
     def __init__(self):
         """Initialize the shader manager"""
         self.shaders = {}
-
+        
         # Create shader directory if it doesn't exist
         if not os.path.exists(SHADER_DIR):
             os.makedirs(SHADER_DIR)
+            logger.info(f"Created shader directory: {SHADER_DIR}")
 
         # Create default shaders
         self.create_default_shaders()
+        debug_utils.debug_print(f"Shader manager initialized with {len(self.shaders)} shaders")
 
     def create_default_shaders(self):
         """Create default shaders if not found on disk"""
@@ -181,7 +185,7 @@ class ShaderManager:
             if not self.load_shader_from_files("ring", "ring_vertex.glsl", "ring_fragment.glsl"):
                 self.create_default_ring_shader()
         except Exception as e:
-            print(f"Error creating default shaders: {e}")
+            logger.error(f"Error creating default shaders: {e}")
             traceback.print_exc()
 
     def load_shader_from_files(self, name, vertex_file, fragment_file):
@@ -193,6 +197,7 @@ class ShaderManager:
 
             # Check if files exist
             if not os.path.exists(vertex_path) or not os.path.exists(fragment_path):
+                debug_utils.debug_print(f"Shader files not found: {vertex_file}, {fragment_file}")
                 return False
 
             # Read shader source
@@ -206,21 +211,44 @@ class ShaderManager:
             shader_program = self.compile_shader(vertex_src, fragment_src)
             if shader_program:
                 self.shaders[name] = shader_program
+                debug_utils.debug_print(f"Loaded shader {name} from files")
                 return True
             return False
         except Exception as e:
-            print(f"Error loading shader files for {name}: {e}")
+            logger.error(f"Error loading shader files for {name}: {e}")
             return False
 
     def compile_shader(self, vertex_src, fragment_src):
         """Compile and link shader program"""
         try:
+            # Compile vertex shader
             vertex_shader = shaders.compileShader(vertex_src, GL_VERTEX_SHADER)
+            if not debug_utils.check_shader_compilation(vertex_shader):
+                logger.error("Vertex shader compilation failed")
+                return 0
+                
+            # Compile fragment shader
             fragment_shader = shaders.compileShader(fragment_src, GL_FRAGMENT_SHADER)
+            if not debug_utils.check_shader_compilation(fragment_shader):
+                logger.error("Fragment shader compilation failed")
+                return 0
+                
+            # Link program
             shader_program = shaders.compileProgram(vertex_shader, fragment_shader)
+            if not debug_utils.check_program_linking(shader_program):
+                logger.error("Shader program linking failed")
+                return 0
+                
+            # Validate program
+            if not debug_utils.validate_program(shader_program):
+                logger.warning("Shader program validation failed (may still work)")
+                
+            debug_utils.debug_print(f"Compiled shader program: {shader_program}")
             return shader_program
+            
         except Exception as e:
-            print(f"Error compiling shader: {e}")
+            logger.error(f"Error compiling shader: {e}")
+            traceback.print_exc()
             return 0
 
     def create_default_planet_shader(self):
@@ -303,8 +331,9 @@ class ShaderManager:
             shader_program = self.compile_shader(vertex_src, fragment_src)
             if shader_program:
                 self.shaders["planet"] = shader_program
+                debug_utils.debug_print("Created default planet shader")
         except Exception as e:
-            print(f"Error creating planet shader: {e}")
+            logger.error(f"Error creating planet shader: {e}")
 
     def create_default_trail_shader(self):
         """Create the default trail shader"""
@@ -340,8 +369,9 @@ class ShaderManager:
             shader_program = self.compile_shader(vertex_src, fragment_src)
             if shader_program:
                 self.shaders["trail"] = shader_program
+                debug_utils.debug_print("Created default trail shader")
         except Exception as e:
-            print(f"Error creating trail shader: {e}")
+            logger.error(f"Error creating trail shader: {e}")
 
     def create_default_ring_shader(self):
         """Create the default ring shader"""
@@ -402,15 +432,16 @@ class ShaderManager:
             shader_program = self.compile_shader(vertex_src, fragment_src)
             if shader_program:
                 self.shaders["ring"] = shader_program
+                debug_utils.debug_print("Created default ring shader")
         except Exception as e:
-            print(f"Error creating ring shader: {e}")
+            logger.error(f"Error creating ring shader: {e}")
 
     def get_shader(self, name):
         """Get a shader by name"""
         if name in self.shaders:
             return self.shaders[name]
         else:
-            print(f"Shader {name} not found")
+            logger.warning(f"Shader {name} not found")
             # Return a valid shader program if possible
             if self.shaders:
                 return next(iter(self.shaders.values()))
@@ -423,8 +454,9 @@ class ShaderManager:
                 if shader:
                     glDeleteProgram(shader)
             self.shaders = {}
+            logger.info("Shader manager cleaned up")
         except Exception as e:
-            print(f"Error cleaning up shaders: {e}")
+            logger.error(f"Error cleaning up shaders: {e}")
 
 
 class Renderer:
@@ -436,25 +468,43 @@ class Renderer:
         self.camera = camera
         self.vaos = {}  # Track VAOs for cleanup
         self.vbos = {}  # Track VBOs for cleanup
+        
+        # Default values in case initialization fails
+        self.sphere_vao = 0
+        self.sphere_vertex_count = 0
+        self.ring_vao = 0  
+        self.ring_vertex_count = 0
+        self.use_advanced_shaders = False
+        self.texture_manager = None
+        self.shader_manager = None
 
         # Initialize OpenGL
         try:
+            debug_utils.debug_print("Setting up OpenGL")
             self.setup_opengl()
 
             # Create texture and shader managers
+            debug_utils.debug_print("Creating texture manager")
             self.texture_manager = TextureManager()
+            
+            debug_utils.debug_print("Creating shader manager")
             self.shader_manager = ShaderManager()
 
             # Create mesh data
+            debug_utils.debug_print("Creating sphere mesh")
             self.sphere_vao, self.sphere_vertex_count = self.create_sphere(SPHERE_DETAIL, SPHERE_DETAIL)
+            
+            debug_utils.debug_print("Creating ring mesh")
             self.ring_vao, self.ring_vertex_count = self.create_ring(SPHERE_DETAIL)
 
             # Assign textures to bodies
+            debug_utils.debug_print("Assigning textures to bodies")
             self.assign_textures()
 
             self.initialization_successful = True
+            debug_utils.debug_print("Renderer initialized successfully")
         except Exception as e:
-            print(f"Error initializing renderer: {e}")
+            logger.error(f"Error initializing renderer: {e}")
             traceback.print_exc()
             self.initialization_successful = False
 
@@ -476,16 +526,13 @@ class Renderer:
         glClearColor(0.0, 0.0, 0.05, 1.0)
 
         # Set up projection matrix (perspective)
-        # Note: We set up the projection matrix here, but we also *get*
-        # the current projection matrix during rendering to handle any
-        # changes (e.g., window resizing).  This combines setup with
-        # flexibility.
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()  # Reset the projection matrix
         gluPerspective(45, WINDOW_WIDTH / WINDOW_HEIGHT, 0.1, 10000.0)
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
-
+        
+        debug_utils.check_gl_errors("setup_opengl")
 
     def create_sphere(self, stacks, slices):
         """Create a sphere mesh"""
@@ -572,10 +619,12 @@ class Renderer:
 
             # Unbind VAO
             glBindVertexArray(0)
+            
+            debug_utils.check_gl_errors("create_sphere")
 
             return vao, len(indices)
         except Exception as e:
-            print(f"Error creating sphere mesh: {e}")
+            logger.error(f"Error creating sphere mesh: {e}")
             traceback.print_exc()
             return 0, 0
 
@@ -639,26 +688,31 @@ class Renderer:
 
             # Unbind VAO
             glBindVertexArray(0)
+            
+            debug_utils.check_gl_errors("create_ring")
 
             return vao, len(vertices) // 3  # Number of vertices, not indices
         except Exception as e:
-            print(f"Error creating ring mesh: {e}")
+            logger.error(f"Error creating ring mesh: {e}")
             traceback.print_exc()
             return 0, 0
 
     def assign_textures(self):
         """Assign textures to bodies in the simulation"""
         for body in self.simulation.bodies:
-            body.texture_id = self.texture_manager.load_texture(body.texture_name)
+            if hasattr(body, 'texture_name') and body.texture_name:
+                body.texture_id = self.texture_manager.load_texture(body.texture_name)
+                debug_utils.debug_print(f"Assigned texture {body.texture_name} to {body.name}")
 
     def render(self):
         """Render the scene"""
         if not self.initialization_successful:
+            debug_utils.debug_print("Skipping render, initialization was not successful")
             return
 
         try:
-            # Clear buffers
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            # Clear buffers - moved to main.py
+            # glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
             # Set up view matrix
             glLoadIdentity()
@@ -674,15 +728,18 @@ class Renderer:
             self.draw_bodies(view_matrix, projection_matrix)
 
             # Draw orbital trails
-            if SHOW_TRAILS:
+            if SHOW_TRAILS and hasattr(self.simulation, 'show_trails') and self.simulation.show_trails:
                 self.draw_trails(view_matrix, projection_matrix)
 
             # Draw coordinate axes if enabled
             if SHOW_AXES:
                 self.draw_axes()
+                
+            # Debug check for GL errors
+            debug_utils.check_gl_errors("render")
 
         except Exception as e:
-            print(f"Error in render method: {e}")
+            logger.error(f"Error in render method: {e}")
             traceback.print_exc()
 
 
@@ -694,7 +751,9 @@ class Renderer:
 
         shader = self.shader_manager.get_shader("planet")
         if not shader:
+            debug_utils.debug_print(f"No shader available for {body.name}")
             return
+            
         try:
             glUseProgram(shader)  # Make sure to use the shader
 
@@ -713,27 +772,73 @@ class Renderer:
 
             # Set uniforms
             model_loc = glGetUniformLocation(shader, "model")
+            view_loc = glGetUniformLocation(shader, "view")
+            proj_loc = glGetUniformLocation(shader, "projection")
+            light_pos_loc = glGetUniformLocation(shader, "lightPos")
+            view_pos_loc = glGetUniformLocation(shader, "viewPos")
             base_color_loc = glGetUniformLocation(shader, "baseColor")
             use_texture_loc = glGetUniformLocation(shader, "useTexture")
-
-            glUniformMatrix4fv(model_loc, 1, GL_FALSE, model_matrix)
-            glUniform3f(base_color_loc, body.color[0], body.color[1], body.color[2])
+            
+            # Set common uniforms
+            if model_loc != -1:
+                glUniformMatrix4fv(model_loc, 1, GL_FALSE, model_matrix)
+            if view_loc != -1:
+                glUniformMatrix4fv(view_loc, 1, GL_FALSE, view_matrix)
+            if proj_loc != -1:
+                glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection_matrix)
+                
+            # Find the sun position for lighting
+            sun_pos = np.array([0, 0, 0])  # Default if sun not found
+            for b in self.simulation.bodies:
+                if b.name == "Sun":
+                    sun_pos = b.position / SCALE_FACTOR
+                    break
+                    
+            # Calculate camera position for lighting
+            eye_pos = self.camera.target - np.array([
+                self.camera.distance * np.sin(self.camera.x_angle) * np.cos(self.camera.y_angle),
+                self.camera.distance * np.sin(self.camera.y_angle),
+                self.camera.distance * np.cos(self.camera.x_angle) * np.cos(self.camera.y_angle)
+            ])
+            
+            # Set lighting uniforms if available
+            if light_pos_loc != -1:
+                glUniform3f(light_pos_loc, sun_pos[0], sun_pos[1], sun_pos[2])
+            if view_pos_loc != -1:
+                glUniform3f(view_pos_loc, eye_pos[0], eye_pos[1], eye_pos[2])
+            
+            # Set material uniforms
+            if base_color_loc != -1:
+                glUniform3f(base_color_loc, body.color[0], body.color[1], body.color[2])
 
             # Bind texture if available
-            if body.texture_id:
+            if hasattr(body, 'texture_id') and body.texture_id:
                 glActiveTexture(GL_TEXTURE0)
                 glBindTexture(GL_TEXTURE_2D, body.texture_id)
-                glUniform1i(glGetUniformLocation(shader, "texSampler"), 0)
-                glUniform1i(use_texture_loc, 1)
+                
+                tex_loc = glGetUniformLocation(shader, "texSampler")
+                if tex_loc != -1:
+                    glUniform1i(tex_loc, 0)
+                    
+                if use_texture_loc != -1:
+                    glUniform1i(use_texture_loc, 1)
             else:
-                glUniform1i(use_texture_loc, 0)
+                if use_texture_loc != -1:
+                    glUniform1i(use_texture_loc, 0)
 
-            # Draw sphere
-            glDrawElements(GL_TRIANGLES, self.sphere_vertex_count, GL_UNSIGNED_INT, None)
+            # Bind sphere VAO and draw
+            if self.sphere_vao:
+                glBindVertexArray(self.sphere_vao)
+                glDrawElements(GL_TRIANGLES, self.sphere_vertex_count, GL_UNSIGNED_INT, None)
+                glBindVertexArray(0)
+            else:
+                debug_utils.debug_print(f"No sphere VAO for {body.name}")
 
             # Draw rings if body has them
-            if body.has_rings:
+            if hasattr(body, 'has_rings') and body.has_rings:
                 self.draw_rings(body, model_matrix, view_matrix, projection_matrix)
+                
+            debug_utils.check_gl_errors(f"_draw_body_standard for {body.name}")
         except Exception as e:
             logger.error(f"Error in _draw_body_standard for {body.name}: {e}")
             traceback.print_exc()
@@ -742,42 +847,269 @@ class Renderer:
 
     def draw_bodies(self, view_matrix, projection_matrix):
         """Draw all celestial bodies, with fallback to standard rendering."""
-
         # Skip if not initialized
         if not hasattr(self, 'initialization_successful') or not self.initialization_successful:
+            debug_utils.debug_print("Skipping draw_bodies, initialization was not successful")
             return
 
         # --- Advanced Rendering Attempt (Optional) ---
         try:
-            import renderer_high_res  # Try importing high-res renderer
-
+            # First check if there are any bodies to draw
+            if not self.simulation.bodies:
+                debug_utils.debug_print("No bodies to draw")
+                return
+                
+            debug_utils.debug_print(f"Drawing {len(self.simulation.bodies)} bodies")
+                
+            # Check if high-res extension is available
+            high_res_available = False
+            try:
+                # Avoid importing if not initialized properly
+                if hasattr(self, 'use_advanced_shaders') and self.use_advanced_shaders:
+                    import renderer_high_res
+                    high_res_available = True
+            except ImportError:
+                high_res_available = False
+            
+            # Draw each body
             successful_renders = 0
             for body in self.simulation.bodies:
                 if not np.all(np.isfinite(body.position)):
+                    debug_utils.debug_print(f"Skipping {body.name} with invalid position")
                     continue
 
-                try:
-                    success = renderer_high_res.draw_body_with_advanced_shader(
-                        self, body, view_matrix, projection_matrix
-                    )
-                    if success:
-                        successful_renders += 1
-                    else:
+                # Try advanced rendering if available
+                if high_res_available:
+                    try:
+                        success = renderer_high_res.draw_body_with_advanced_shader(
+                            self, body, view_matrix, projection_matrix
+                        )
+                        if success:
+                            successful_renders += 1
+                        else:
+                            self._draw_body_standard(body, view_matrix, projection_matrix)
+                    except Exception as e:
+                        logger.error(f"Error rendering {body.name} with advanced shader: {e}")
                         self._draw_body_standard(body, view_matrix, projection_matrix)
-                except Exception as e:
-                    logger.error(f"Error rendering {body.name} with advanced shader: {e}")
-                    traceback.print_exc()
+                else:
+                    # Standard rendering
                     self._draw_body_standard(body, view_matrix, projection_matrix)
-        except ImportError as e:
-            logger.warning("High-res renderer not available, using standard rendering.")
-            for body in self.simulation.bodies:
-                if not np.all(np.isfinite(body.position)):
-                    continue
-                self._draw_body_standard(body, view_matrix, projection_matrix)
+            
+            debug_utils.debug_print(f"Drew {successful_renders} bodies with advanced shaders")
+                    
         except Exception as e:
             logger.error(f"Unexpected error in draw_bodies: {e}")
             traceback.print_exc()
+            
+            # Emergency fallback: try to draw at least something
+            try:
+                for body in self.simulation.bodies:
+                    if not np.all(np.isfinite(body.position)):
+                        continue
+                    self._draw_body_standard(body, view_matrix, projection_matrix)
+            except Exception as e2:
+                logger.error(f"Emergency fallback drawing failed: {e2}")
+
+    def draw_trails(self, view_matrix, projection_matrix):
+        """Draw orbital trails for all bodies"""
+        if not self.simulation.bodies:
+            return
+            
+        try:
+            shader = self.shader_manager.get_shader("trail")
+            if not shader:
+                return
+                
+            glUseProgram(shader)
+            
+            # Set common uniforms
+            view_loc = glGetUniformLocation(shader, "view")
+            proj_loc = glGetUniformLocation(shader, "projection")
+            color_loc = glGetUniformLocation(shader, "trailColor")
+            
+            if view_loc != -1:
+                glUniformMatrix4fv(view_loc, 1, GL_FALSE, view_matrix)
+            if proj_loc != -1:
+                glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection_matrix)
+            
+            # Draw each body's trail
             for body in self.simulation.bodies:
+                # Skip if no trail or invalid positions
+                if not hasattr(body, 'trail') or not body.trail:
+                    continue
+                
+                # Skip bodies with invalid positions
                 if not np.all(np.isfinite(body.position)):
                     continue
-                self._draw_body_standard(body, view_matrix, projection_matrix)
+                
+                # Create vertices from trail positions
+                trail_points = []
+                for pos in body.trail:
+                    # Scale positions for rendering
+                    trail_points.extend([pos[0] / SCALE_FACTOR, pos[1] / SCALE_FACTOR, pos[2] / SCALE_FACTOR])
+                
+                # Skip if no valid trail points
+                if not trail_points:
+                    continue
+                
+                # Create temporary VAO and VBO for trail
+                trail_vao = glGenVertexArrays(1)
+                glBindVertexArray(trail_vao)
+                
+                trail_vbo = glGenBuffers(1)
+                glBindBuffer(GL_ARRAY_BUFFER, trail_vbo)
+                
+                # Convert to numpy array
+                vertices = np.array(trail_points, dtype=np.float32)
+                glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+                
+                # Set up vertex attribute
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None)
+                glEnableVertexAttribArray(0)
+                
+                # Set trail color from body color
+                if color_loc != -1:
+                    glUniform3f(color_loc, body.color[0], body.color[1], body.color[2])
+                
+                # Draw trail as a line strip
+                glDrawArrays(GL_LINE_STRIP, 0, len(trail_points) // 3)
+                
+                # Clean up
+                glBindVertexArray(0)
+                glDeleteVertexArrays(1, [trail_vao])
+                glDeleteBuffers(1, [trail_vbo])
+            
+            glUseProgram(0)
+            
+        except Exception as e:
+            logger.error(f"Error drawing trails: {e}")
+    
+    def draw_rings(self, body, model_matrix, view_matrix, projection_matrix):
+        """Draw rings for a celestial body"""
+        try:
+            # Skip if no ring mesh
+            if not self.ring_vao or self.ring_vertex_count <= 0:
+                return
+                
+            shader = self.shader_manager.get_shader("ring")
+            if not shader:
+                return
+                
+            glUseProgram(shader)
+            
+            # Set uniforms
+            model_loc = glGetUniformLocation(shader, "model")
+            view_loc = glGetUniformLocation(shader, "view")
+            proj_loc = glGetUniformLocation(shader, "projection")
+            color_loc = glGetUniformLocation(shader, "ringColor")
+            tex_loc = glGetUniformLocation(shader, "texSampler")
+            
+            # Create ring model matrix from body matrix
+            ring_matrix = np.copy(model_matrix)
+            
+            # Adjust ring matrix
+            if hasattr(body, 'ring_inner_radius') and hasattr(body, 'ring_outer_radius'):
+                # Use body's ring properties
+                inner_scale = body.ring_inner_radius / 0.6  # Default inner
+                outer_scale = body.ring_outer_radius / 1.0  # Default outer
+                ring_scale = max(inner_scale, outer_scale)
+                
+                # Scale the ring correctly
+                ring_matrix[0, 0] *= ring_scale
+                ring_matrix[1, 1] *= ring_scale
+                ring_matrix[2, 2] *= ring_scale
+            else:
+                # Default: make rings larger than body
+                ring_scale = 2.5
+                ring_matrix[0, 0] *= ring_scale
+                ring_matrix[1, 1] *= 0.1  # Flatten the rings
+                ring_matrix[2, 2] *= ring_scale
+            
+            # Set matrix uniforms
+            if model_loc != -1:
+                glUniformMatrix4fv(model_loc, 1, GL_FALSE, ring_matrix)
+            if view_loc != -1:
+                glUniformMatrix4fv(view_loc, 1, GL_FALSE, view_matrix)
+            if proj_loc != -1:
+                glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection_matrix)
+            
+            # Set ring color from body color but slightly lighter
+            if color_loc != -1:
+                glUniform3f(color_loc, 
+                          min(body.color[0] * 1.2, 1.0),
+                          min(body.color[1] * 1.2, 1.0),
+                          min(body.color[2] * 1.2, 1.0))
+            
+            # Bind ring texture if available
+            ring_texture = self.texture_manager.load_texture("saturn_rings.png")
+            if ring_texture:
+                glActiveTexture(GL_TEXTURE0)
+                glBindTexture(GL_TEXTURE_2D, ring_texture)
+                if tex_loc != -1:
+                    glUniform1i(tex_loc, 0)
+            
+            # Draw ring
+            glBindVertexArray(self.ring_vao)
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, self.ring_vertex_count)
+            glBindVertexArray(0)
+            
+            glUseProgram(0)
+            
+        except Exception as e:
+            logger.error(f"Error drawing rings for {body.name}: {e}")
+    
+    def draw_axes(self):
+        """Draw coordinate axes for debugging"""
+        try:
+            # Draw simple coordinate axes using immediate mode for debugging
+            glDisable(GL_LIGHTING)
+            glBegin(GL_LINES)
+            
+            # X axis (red)
+            glColor3f(1.0, 0.0, 0.0)
+            glVertex3f(0.0, 0.0, 0.0)
+            glVertex3f(10.0, 0.0, 0.0)
+            
+            # Y axis (green)
+            glColor3f(0.0, 1.0, 0.0)
+            glVertex3f(0.0, 0.0, 0.0)
+            glVertex3f(0.0, 10.0, 0.0)
+            
+            # Z axis (blue)
+            glColor3f(0.0, 0.0, 1.0)
+            glVertex3f(0.0, 0.0, 0.0)
+            glVertex3f(0.0, 0.0, 10.0)
+            
+            glEnd()
+            
+        except Exception as e:
+            logger.error(f"Error drawing axes: {e}")
+
+    def cleanup(self):
+        """Clean up OpenGL resources"""
+        try:
+            # Clean up shader manager
+            if hasattr(self, 'shader_manager') and self.shader_manager:
+                self.shader_manager.cleanup()
+            
+            # Clean up texture manager
+            if hasattr(self, 'texture_manager') and self.texture_manager:
+                self.texture_manager.cleanup()
+            
+            # Delete VAOs
+            for vao in self.vaos.values():
+                if vao:
+                    glDeleteVertexArrays(1, [vao])
+            
+            # Delete VBOs
+            for vbo in self.vbos.values():
+                if vbo:
+                    glDeleteBuffers(1, [vbo])
+            
+            # Clear collections
+            self.vaos.clear()
+            self.vbos.clear()
+            
+            logger.info("Renderer resources cleaned up")
+        except Exception as e:
+            logger.error(f"Error cleaning up renderer resources: {e}")
