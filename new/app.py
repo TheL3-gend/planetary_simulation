@@ -1,5 +1,25 @@
 import glfw
-from OpenGL.GL import *
+from OpenGL.GL import (
+    glCreateShader, glShaderSource, glCompileShader,
+    glGetShaderiv, glGetShaderInfoLog,
+    glCreateProgram, glAttachShader, glLinkProgram,
+    glGetProgramiv, glGetProgramInfoLog, glDeleteShader,
+    glGenVertexArrays, glGenBuffers,
+    glBindVertexArray, glBindBuffer, glBufferData,
+    glVertexAttribPointer, glEnableVertexAttribArray,
+    glEnable, glBlendFunc, glClear,
+    glUseProgram,
+    glGetUniformLocation, glUniformMatrix4fv, 
+    glUniform1i, glUniform4f,
+    glDrawArrays,
+    GL_COMPILE_STATUS, GL_LINK_STATUS,
+    GL_ARRAY_BUFFER, GL_STATIC_DRAW, GL_DYNAMIC_DRAW,
+    GL_DEPTH_TEST, GL_BLEND,
+    GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+    GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT,
+    GL_FLOAT, GL_FALSE,
+    GL_TRIANGLES, GL_LINES
+)
 import numpy as np
 from pyrr import Matrix44, vector, Vector3
 import time
@@ -80,7 +100,8 @@ def create_program(vs_src, fs_src):
     glDeleteShader(fs)
     return prog
 
-# Object class\class Object3D:
+# Object class
+class Object3D:
     def __init__(self, position, velocity, mass, density=5515.0, color=(1.0,0.0,0.0,1.0), glow=False):
         self.position = Vector3(position)
         self.velocity = Vector3(velocity)
@@ -133,7 +154,6 @@ def create_program(vs_src, fs_src):
                 acc = dirn*(force/self.mass)
                 if not pause:
                     self.velocity += acc*delta_time
-                # collision
                 if other.radius+self.radius>dist:
                     self.velocity *= -0.2
         if not pause:
@@ -144,13 +164,11 @@ def create_grid(size, divs):
     verts=[]
     step=size/divs
     half=size/2
-    # X-lines
     y=0
     for z in np.linspace(-half,half,divs+1):
         for i in range(divs):
             x0=-half+i*step; x1=x0+step
             verts += [x0,y,z,x1,y,z]
-    # Z-lines
     for x in np.linspace(-half,half,divs+1):
         for i in range(divs):
             z0=-half+i*step; z1=z0+step
@@ -226,7 +244,6 @@ if __name__=='__main__':
 
     projection = Matrix44.perspective_projection(45.0, 800/600, 0.1, 750000.0)
 
-    # Setup grid mesh
     grid_data = create_grid(20000.0,25)
     grid_VAO = glGenVertexArrays(1); grid_VBO = glGenBuffers(1)
     glBindVertexArray(grid_VAO)
@@ -240,21 +257,14 @@ if __name__=='__main__':
         current=time.time(); delta_time = current-last_frame; last_frame=current
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)
         glUseProgram(program)
-
-        # Camera
         view = Matrix44.look_at(camera_pos, camera_pos+camera_front, camera_up)
         glUniformMatrix4fv(view_loc,1,GL_FALSE,view.astype('float32'))
         glUniformMatrix4fv(proj_loc,1,GL_FALSE,projection.astype('float32'))
-
-        # Draw grid
         glUniform1i(grid_flag, 1); glUniform1i(glow_flag, 0)
         glUniform4f(color_loc,1,1,1,0.25)
         glBindBuffer(GL_ARRAY_BUFFER, grid_VBO)
-        # no dynamic update of grid bending for brevity
         glBindVertexArray(grid_VAO)
         glDrawArrays(GL_LINES,0, grid_data.size//3)
-
-        # Physics and draw objects
         for obj in objects:
             glUniform1i(grid_flag, 0)
             glUniform4f(color_loc,*obj.color)
@@ -264,8 +274,6 @@ if __name__=='__main__':
             glUniformMatrix4fv(model_loc,1,GL_FALSE,model.astype('float32'))
             glBindVertexArray(obj.VAO)
             glDrawArrays(GL_TRIANGLES,0,obj.vertex_count)
-
         glfw.swap_buffers(window)
         glfw.poll_events()
-
     glfw.terminate()
